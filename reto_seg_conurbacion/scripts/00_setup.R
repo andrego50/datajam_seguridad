@@ -106,17 +106,19 @@ ccb_municipios <- unique(ccb_municipios)
 cat("Municipios CCB definidos:", length(ccb_municipios), "\n")
 
 # ==============================================================================
-# 2. Cargar secciones urbanas DANE (solo Bogota + Cundinamarca primero)
+# 2. Cargar secciones DANE urbanas + rurales (Bogota + Cundinamarca)
 # ==============================================================================
 
-cat("Cargando secciones urbanas DANE...\n")
+cat("Cargando secciones DANE (urbanas + rurales)...\n")
 secciones_all <- st_read(GPKG_PATH, quiet = TRUE)
 
 # Filtrar Bogota (11) y Cundinamarca (25)
 secciones_bc <- secciones_all %>%
   filter(dpto_ccdgo %in% c("11", "25"))
 
-cat("Secciones urbanas Bogota+Cundinamarca:", nrow(secciones_bc), "\n")
+cat("Secciones Bogota+Cundinamarca:", nrow(secciones_bc),
+    "(", sum(secciones_bc$urban == 1), "urbanas,",
+    sum(secciones_bc$urban == 0), "rurales )\n")
 
 # ==============================================================================
 # 3. Disolver secciones a nivel de municipio para contigüidad Queen
@@ -130,7 +132,7 @@ municipios_poly <- secciones_bc %>%
 # Reparar geometrias
 municipios_poly <- st_make_valid(municipios_poly)
 
-cat("Municipios con secciones urbanas:", nrow(municipios_poly), "\n")
+cat("Municipios con secciones censales:", nrow(municipios_poly), "\n")
 
 # ==============================================================================
 # 4. Calcular contigüidad Queen y encontrar vecinos de primer grado
@@ -141,7 +143,7 @@ nb_queen <- poly2nb(municipios_poly, queen = TRUE)
 
 # Identificar cuales de nuestros municipios CCB estan en el GeoPackage
 ccb_presentes <- ccb_municipios[ccb_municipios %in% municipios_poly$mpio_cdpmp]
-cat("Municipios CCB con secciones urbanas:", length(ccb_presentes), "\n")
+cat("Municipios CCB con secciones censales:", length(ccb_presentes), "\n")
 
 # Encontrar indices de los municipios CCB
 idx_ccb <- which(municipios_poly$mpio_cdpmp %in% ccb_presentes)
@@ -166,7 +168,9 @@ cat("\nTotal municipios de estudio (CCB + vecinos):", length(municipios_estudio)
 secciones_estudio <- secciones_bc %>%
   filter(mpio_cdpmp %in% municipios_estudio)
 
-cat("Secciones urbanas en area de estudio:", nrow(secciones_estudio), "\n")
+cat("Secciones en area de estudio:", nrow(secciones_estudio),
+    "(", sum(secciones_estudio$urban == 1), "urbanas,",
+    sum(secciones_estudio$urban == 0), "rurales )\n")
 
 # Agregar flag de si es CCB o vecino
 secciones_estudio <- secciones_estudio %>%
