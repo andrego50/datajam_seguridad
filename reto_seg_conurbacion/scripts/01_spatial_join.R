@@ -45,24 +45,39 @@ procesar_siedco <- function(filepath, nombre_delito, secciones, bbox) {
   cat("\n===", toupper(nombre_delito), "===\n")
   cat("Leyendo:", basename(filepath), "...\n")
 
-  # Leer CSV (separador ;)
-  df <- read_delim(filepath, delim = ";", show_col_types = FALSE,
-                   locale = locale(decimal_mark = ","))
+  # Detectar separador decimal leyendo primera linea del archivo
+  primera_linea <- readLines(filepath, n = 2)[2]  # segunda linea = primer dato
+  usa_coma_decimal <- grepl("[0-9],[0-9]", primera_linea) &&
+                      !grepl("[0-9]\\.[0-9]", primera_linea)
+
+  if (usa_coma_decimal) {
+    # Archivos como theft.csv, assault.csv usan "," como decimal
+    df <- read_delim(filepath, delim = ";", show_col_types = FALSE,
+                     col_types = cols(lat_var = col_character(),
+                                      lon_var = col_character(),
+                                      .default = col_guess()))
+    df$lat_var <- as.numeric(gsub(",", ".", df$lat_var))
+    df$lon_var <- as.numeric(gsub(",", ".", df$lon_var))
+    cat("  (Formato: coma como decimal)\n")
+  } else {
+    # Archivos como extortion.csv, burglary.csv usan "." como decimal
+    df <- read_delim(filepath, delim = ";", show_col_types = FALSE)
+    cat("  (Formato: punto como decimal)\n")
+  }
 
   cat("  Registros totales:", nrow(df), "\n")
 
-  # Limpiar nombres de columnas
-  if ("lat_var" %in% names(df) && "lon_var" %in% names(df)) {
-    # Algunos archivos usan coma como decimal en lat/lon
-    if (is.character(df$lat_var)) {
-      df$lat_var <- as.numeric(gsub(",", ".", df$lat_var))
-    }
-    if (is.character(df$lon_var)) {
-      df$lon_var <- as.numeric(gsub(",", ".", df$lon_var))
-    }
-  } else {
+  if (!("lat_var" %in% names(df) && "lon_var" %in% names(df))) {
     cat("  ERROR: No se encontraron columnas lat_var/lon_var\n")
     return(NULL)
+  }
+
+  # Asegurar que lat/lon son numericos
+  if (is.character(df$lat_var)) {
+    df$lat_var <- as.numeric(gsub(",", ".", df$lat_var))
+  }
+  if (is.character(df$lon_var)) {
+    df$lon_var <- as.numeric(gsub(",", ".", df$lon_var))
   }
 
   # Filtrar NAs en coordenadas

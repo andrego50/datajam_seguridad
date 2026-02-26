@@ -7,10 +7,9 @@
 # ==============================================================================
 
 library(igraph)
-library(dplyr)
 library(plyr)
+library(dplyr)
 library(zoo)
-library(parallel)
 
 # --- Rutas ---
 PROC_DIR     <- file.path(getwd(), "data", "processed")
@@ -27,7 +26,7 @@ if (!file.exists(CHRONNETS_SRC)) {
 source(CHRONNETS_SRC)
 
 # --- Configuracion ---
-NUM_CORES <- max(1, detectCores() - 2)
+NUM_CORES <- 2
 cat("Usando", NUM_CORES, "cores\n")
 
 # Lista de delitos procesados
@@ -53,17 +52,17 @@ construir_chronnet <- function(nombre_delito, proc_dir, out_dir, num_cores) {
   cat("  Secciones unicas:", n_distinct(df$cell), "\n")
   cat("  Semanas unicas:", n_distinct(df$t), "\n")
 
-  # Preparar input para chronnet_create: data.frame(cell, t)
-  # t debe ser entero secuencial
+  # Agregar a pares unicos (cell, t) y mapear t secuencial
   semanas_unicas <- sort(unique(df$t))
   semana_map <- setNames(seq_along(semanas_unicas), semanas_unicas)
   df$t_seq <- semana_map[as.character(df$t)]
 
-  chronnet_input <- data.frame(
-    cell = df$cell,
-    t    = df$t_seq
-  )
+  chronnet_input <- df %>%
+    dplyr::distinct(cell, t_seq) %>%
+    dplyr::select(t = t_seq, cell) %>%
+    as.data.frame()
 
+  cat("  Pares unicos (cell, t):", nrow(chronnet_input), "\n")
   cat("  Rango temporal: semana", min(chronnet_input$t),
       "a", max(chronnet_input$t), "\n")
 
@@ -147,6 +146,7 @@ for (delito in delitos) {
   resultados[[delito]] <- construir_chronnet(
     delito, PROC_DIR, CHRONNET_DIR, NUM_CORES
   )
+  gc()
 }
 
 # ==============================================================================
