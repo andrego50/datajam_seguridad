@@ -6,6 +6,8 @@
 library(sf)
 library(spdep)
 library(dplyr)
+library(terra)
+library(raster)
 library(leaflet)
 library(htmlwidgets)
 
@@ -276,116 +278,170 @@ if (nrow(coefs) > 0) {
   cat("   Guardado: output/coeficientes_modelo.png\n")
 }
 
-# ── 7. MAPA LEAFLET INTEGRADO ───────────────────────────────────────────────
-cat("\n7. Generando mapa integrado...\n")
+# ── 7. MAPA LEAFLET INTEGRADO (SUPERFICIES SUAVIZADAS) ──────────────────────
+cat("\n7. Generando mapa integrado con superficies suavizadas...\n")
 
 hex_wgs <- st_transform(hex_grid, 4326)
+metro_line_wgs <- st_sfc(st_linestring(coords_est[orden, 1:2]), crs = 4326)
 
-# Paletas
-make_pal <- function(vals, palette = "YlOrRd") {
-  vals_clean <- vals[!is.na(vals)]
-  if (length(vals_clean) == 0) return(NULL)
-  colorNumeric(palette, domain = vals_clean, na.color = "transparent")
+# Función: rasterizar variable del hex_grid a superficie suavizada
+hex_to_raster <- function(hex_sf, var_name, res = 50, crs_code = 3116) {
+  vals <- hex_sf[[var_name]]
+  if (all(is.na(vals))) return(NULL)
+  centroids <- st_centroid(hex_sf)
+  coords <- st_coordinates(centroids)
+  df <- data.frame(x = coords[, 1], y = coords[, 2], z = vals)
+  df <- df[!is.na(df$z), ]
+  if (nrow(df) < 10) return(NULL)
+  v <- vect(df, geom = c("x", "y"), crs = paste0("EPSG:", crs_code))
+  ext_buf <- ext(v) + res
+  r <- rast(ext_buf, res = res, crs = paste0("EPSG:", crs_code))
+  r <- rasterize(v, r, field = "z", fun = "mean")
+  r_wgs <- project(r, "EPSG:4326", method = "bilinear")
+  raster(r_wgs)
 }
 
-# Popups
-make_popup <- function(hex) {
-  sprintf(
-    "<b>Hex #%d</b> | Dist metro: %d m<hr/>
-    <b>Delitos (2021-2023):</b><br/>
-    Hurto comercio: %d | Hurto personas: %d<br/>
-    Extorsión: %d | Lesiones: %d<br/>
-    <b>Cambio (antes/durante):</b> %+.1f%%<br/>
-    <b>Percepción:</b> %s<br/>
-    <b>Empresas:</b> %s | MiPyme: %s<br/>
-    <b>Entorno:</b> Verde: %s%% | Edificios: %s | Vías: %s m",
-    hex$hex_id, round(hex$dist_metro),
-    ifelse("shoplifting" %in% names(hex), hex$shoplifting, NA),
-    ifelse("theft" %in% names(hex), hex$theft, NA),
-    ifelse("extortion" %in% names(hex), hex$extortion, NA),
-    ifelse("assault" %in% names(hex), hex$assault, NA),
-    ifelse("cambio_total" %in% names(hex), hex$cambio_total * 100, NA),
-    ifelse("pred_percepcion" %in% names(hex) & !is.na(hex$pred_percepcion),
-           sprintf("%.2f", hex$pred_percepcion), "N/A"),
-    ifelse("n_empresas_2024" %in% names(hex) & !is.na(hex$n_empresas_2024),
-           as.character(hex$n_empresas_2024), "N/A"),
-    ifelse("pct_mipyme" %in% names(hex) & !is.na(hex$pct_mipyme),
-           sprintf("%.0f%%", hex$pct_mipyme * 100), "N/A"),
-    ifelse("pct_verde" %in% names(hex), sprintf("%.1f", hex$pct_verde * 100), "N/A"),
-    ifelse("n_edificios" %in% names(hex), hex$n_edificios, "N/A"),
-    ifelse("longitud_vias_m" %in% names(hex), round(hex$longitud_vias_m), "N/A")
-  )
-}
-
-popups <- make_popup(hex_wgs)
+# Popups para hexágonos de referencia
+popups <- sprintf(
+  "<b>Hex #%d</b> | Dist metro: %d m<hr/>
+  <b>Delitos (2021-2023):</b><br/>
+  Hurto comercio: %s | Hurto personas: %s<br/>
+  Extorsión: %s | Lesiones: %s<br/>
+  <b>Cambio (antes/durante):</b> %s<br/>
+  <b>Percepción:</b> %s<br/>
+  <b>Empresas:</b> %s | MiPyme: %s<br/>
+  <b>Entorno:</b> Verde: %s%% | Edificios: %s | Vías: %s m",
+  hex_wgs$hex_id, round(hex_wgs$dist_metro),
+  ifelse("shoplifting" %in% names(hex_wgs), hex_wgs$shoplifting, "N/A"),
+  ifelse("theft" %in% names(hex_wgs), hex_wgs$theft, "N/A"),
+  ifelse("extortion" %in% names(hex_wgs), hex_wgs$extortion, "N/A"),
+  ifelse("assault" %in% names(hex_wgs), hex_wgs$assault, "N/A"),
+  ifelse("cambio_total" %in% names(hex_wgs),
+         sprintf("%+.1f%%", hex_wgs$cambio_total * 100), "N/A"),
+  ifelse("pred_percepcion" %in% names(hex_wgs) & !is.na(hex_wgs$pred_percepcion),
+         sprintf("%.2f", hex_wgs$pred_percepcion), "N/A"),
+  ifelse("n_empresas_2024" %in% names(hex_wgs) & !is.na(hex_wgs$n_empresas_2024),
+         as.character(hex_wgs$n_empresas_2024), "N/A"),
+  ifelse("pct_mipyme" %in% names(hex_wgs) & !is.na(hex_wgs$pct_mipyme),
+         sprintf("%.0f%%", hex_wgs$pct_mipyme * 100), "N/A"),
+  ifelse("pct_verde" %in% names(hex_wgs),
+         sprintf("%.1f", hex_wgs$pct_verde * 100), "N/A"),
+  ifelse("n_edificios" %in% names(hex_wgs), hex_wgs$n_edificios, "N/A"),
+  ifelse("longitud_vias_m" %in% names(hex_wgs),
+         round(hex_wgs$longitud_vias_m), "N/A")
+)
 
 m <- leaflet() |>
   addProviderTiles(providers$CartoDB.Positron)
 
-# --- Capas de predicción co-kriging (del pipeline original) ---
-if ("pred_shoplifting" %in% names(hex_wgs)) {
-  pal <- make_pal(hex_wgs$pred_shoplifting)
-  if (!is.null(pal)) {
-    m <- m |> addPolygons(data = hex_wgs, fillColor = ~pal(pred_shoplifting),
-      weight = 0.3, opacity = 0.4, color = "#999", fillOpacity = 0.7,
-      popup = popups, group = "Hurto Comercio (kriging)")
+# --- Superficies suavizadas: co-kriging (desde grid_fine si existe) ---
+grid_fine_path <- "data/grid_fine_metro.rds"
+has_grid_fine <- file.exists(grid_fine_path)
+
+if (has_grid_fine) {
+  cat("   Usando grilla fina pre-calculada para kriging...\n")
+  grid_fine <- readRDS(grid_fine_path)
+  coords_fine <- st_coordinates(grid_fine)
+
+  pts_to_rl <- function(coords, values, res = 50) {
+    df <- data.frame(x = coords[, 1], y = coords[, 2], z = values)
+    df <- df[!is.na(df$z), ]
+    v <- vect(df, geom = c("x", "y"), crs = "EPSG:3116")
+    r <- rast(ext(v) + res, res = res, crs = "EPSG:3116")
+    r <- rasterize(v, r, field = "z", fun = "mean")
+    raster(project(r, "EPSG:4326", method = "bilinear"))
+  }
+
+  if ("pred_shoplifting" %in% names(grid_fine)) {
+    rl <- pts_to_rl(coords_fine, grid_fine$pred_shoplifting)
+    pal <- colorNumeric("YlOrRd", values(rl), na.color = "transparent")
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Hurto Comercio (kriging)")
+  }
+  if ("pred_theft" %in% names(grid_fine)) {
+    rl <- pts_to_rl(coords_fine, grid_fine$pred_theft)
+    pal <- colorNumeric("YlOrRd", values(rl), na.color = "transparent")
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Hurto Personas (kriging)")
+  }
+  if ("pred_percepcion" %in% names(grid_fine)) {
+    rl <- pts_to_rl(coords_fine, grid_fine$pred_percepcion)
+    pal <- colorNumeric("RdYlGn", values(rl), na.color = "transparent")
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Percepción (kriging)")
+  }
+} else {
+  cat("   Sin grilla fina — rasterizando desde hex_grid...\n")
+  if ("pred_shoplifting" %in% names(hex_grid)) {
+    rl <- hex_to_raster(hex_grid, "pred_shoplifting")
+    if (!is.null(rl)) {
+      pal <- colorNumeric("YlOrRd", values(rl), na.color = "transparent")
+      m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+        group = "Hurto Comercio (kriging)")
+    }
+  }
+  if ("pred_theft" %in% names(hex_grid)) {
+    rl <- hex_to_raster(hex_grid, "pred_theft")
+    if (!is.null(rl)) {
+      pal <- colorNumeric("YlOrRd", values(rl), na.color = "transparent")
+      m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+        group = "Hurto Personas (kriging)")
+    }
+  }
+  if ("pred_percepcion" %in% names(hex_grid)) {
+    rl <- hex_to_raster(hex_grid, "pred_percepcion")
+    if (!is.null(rl)) {
+      pal <- colorNumeric("RdYlGn", values(rl), na.color = "transparent")
+      m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+        group = "Percepción (kriging)")
+    }
   }
 }
 
-if ("pred_theft" %in% names(hex_wgs)) {
-  pal <- make_pal(hex_wgs$pred_theft)
-  if (!is.null(pal)) {
-    m <- m |> addPolygons(data = hex_wgs, fillColor = ~pal(pred_theft),
-      weight = 0.3, opacity = 0.4, color = "#999", fillOpacity = 0.7,
-      popup = popups, group = "Hurto Personas (kriging)")
+# --- Superficies suavizadas: capas nuevas (rasterizadas desde hex_grid) ---
+if ("cambio_total" %in% names(hex_grid)) {
+  rl <- hex_to_raster(hex_grid, "cambio_total")
+  if (!is.null(rl)) {
+    pal <- colorNumeric("RdBu", values(rl), na.color = "transparent", reverse = TRUE)
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Cambio Delitos (antes/durante)")
   }
 }
 
-if ("pred_percepcion" %in% names(hex_wgs)) {
-  pal <- make_pal(hex_wgs$pred_percepcion, "RdYlGn")
-  if (!is.null(pal)) {
-    m <- m |> addPolygons(data = hex_wgs, fillColor = ~pal(pred_percepcion),
-      weight = 0.3, opacity = 0.4, color = "#999", fillOpacity = 0.7,
-      popup = popups, group = "Percepción (kriging)")
+if ("densidad_empresas" %in% names(hex_grid)) {
+  rl <- hex_to_raster(hex_grid, "densidad_empresas")
+  if (!is.null(rl)) {
+    pal <- colorNumeric("YlGnBu", values(rl), na.color = "transparent")
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Densidad Empresarial")
   }
 }
 
-# --- Capas nuevas: Antes/Durante ---
-if ("cambio_total" %in% names(hex_wgs)) {
-  pal_cambio <- colorNumeric("RdBu", domain = hex_wgs$cambio_total,
-                              na.color = "transparent", reverse = TRUE)
-  m <- m |> addPolygons(data = hex_wgs, fillColor = ~pal_cambio(cambio_total),
-    weight = 0.3, opacity = 0.4, color = "#999", fillOpacity = 0.7,
-    popup = popups, group = "Cambio Delitos (antes/durante)")
-}
-
-# --- Capas nuevas: Empresas ---
-if ("densidad_empresas" %in% names(hex_wgs)) {
-  pal_emp <- make_pal(hex_wgs$densidad_empresas, "YlGnBu")
-  if (!is.null(pal_emp)) {
-    m <- m |> addPolygons(data = hex_wgs, fillColor = ~pal_emp(densidad_empresas),
-      weight = 0.3, opacity = 0.4, color = "#999", fillOpacity = 0.7,
-      popup = popups, group = "Densidad Empresarial")
+if ("pct_verde" %in% names(hex_grid)) {
+  rl <- hex_to_raster(hex_grid, "pct_verde")
+  if (!is.null(rl)) {
+    pal <- colorNumeric("Greens", values(rl), na.color = "transparent")
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Cobertura Verde")
   }
 }
 
-# --- Capas nuevas: Entorno ---
-if ("pct_verde" %in% names(hex_wgs)) {
-  pal_verde <- colorNumeric("Greens", domain = hex_wgs$pct_verde,
-                             na.color = "transparent")
-  m <- m |> addPolygons(data = hex_wgs, fillColor = ~pal_verde(pct_verde),
-    weight = 0.3, opacity = 0.4, color = "#999", fillOpacity = 0.7,
-    popup = popups, group = "Cobertura Verde")
-}
-
-if ("n_edificios" %in% names(hex_wgs)) {
-  pal_edif <- make_pal(hex_wgs$n_edificios, "Oranges")
-  if (!is.null(pal_edif)) {
-    m <- m |> addPolygons(data = hex_wgs, fillColor = ~pal_edif(n_edificios),
-      weight = 0.3, opacity = 0.4, color = "#999", fillOpacity = 0.7,
-      popup = popups, group = "Densidad Edificios")
+if ("n_edificios" %in% names(hex_grid)) {
+  rl <- hex_to_raster(hex_grid, "n_edificios")
+  if (!is.null(rl)) {
+    pal <- colorNumeric("Oranges", values(rl), na.color = "transparent")
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Densidad Edificios")
   }
 }
+
+# --- Hexágonos de referencia (solo bordes, para consulta con popup) ---
+m <- m |>
+  addPolygons(data = hex_wgs,
+    fillColor = "transparent", fillOpacity = 0,
+    weight = 0.8, opacity = 0.5, color = "#666",
+    popup = popups,
+    group = "Grilla hexagonal (ref)")
 
 # --- Infraestructura: Metro ---
 m <- m |>
@@ -401,9 +457,8 @@ m <- m |>
 all_groups <- c("Hurto Comercio (kriging)", "Hurto Personas (kriging)",
                 "Percepción (kriging)", "Cambio Delitos (antes/durante)",
                 "Densidad Empresarial", "Cobertura Verde", "Densidad Edificios",
-                "Metro L1", "Estaciones")
+                "Grilla hexagonal (ref)", "Metro L1", "Estaciones")
 
-# Mantener visibles solo la primera capa + metro
 hide_groups <- all_groups[!all_groups %in% c("Hurto Comercio (kriging)",
                                               "Metro L1", "Estaciones")]
 
@@ -415,11 +470,12 @@ for (g in hide_groups) {
   m <- m |> hideGroup(g)
 }
 
-# Leyenda principal
-if ("pred_shoplifting" %in% names(hex_wgs)) {
-  pal_legend <- make_pal(hex_wgs$pred_shoplifting)
-  if (!is.null(pal_legend)) {
-    m <- m |> addLegend(pal = pal_legend, values = hex_wgs$pred_shoplifting,
+# Leyenda
+if ("pred_shoplifting" %in% names(hex_grid)) {
+  rl_legend <- hex_to_raster(hex_grid, "pred_shoplifting")
+  if (!is.null(rl_legend)) {
+    pal_legend <- colorNumeric("YlOrRd", values(rl_legend), na.color = "transparent")
+    m <- m |> addLegend(pal = pal_legend, values = values(rl_legend),
       title = "Hurto comercio<br/>(log co-kriging)", position = "bottomright")
   }
 }
