@@ -86,7 +86,7 @@ map_multiplex <- leaflet(secciones_wgs) %>%
 
 saveWidget(map_multiplex,
            file.path(MAP_DIR, "mapa_hotspots_multiplex.html"),
-           selfcontained = TRUE)
+           selfcontained = FALSE)
 cat("  Guardado: mapa_hotspots_multiplex.html\n")
 
 # ==============================================================================
@@ -154,7 +154,7 @@ for (nombre in delitos) {
 
   saveWidget(map_com,
              file.path(MAP_DIR, paste0("mapa_comunidades_", nombre, ".html")),
-             selfcontained = TRUE)
+             selfcontained = FALSE)
   cat("  Guardado: mapa_comunidades_", nombre, ".html\n")
 }
 
