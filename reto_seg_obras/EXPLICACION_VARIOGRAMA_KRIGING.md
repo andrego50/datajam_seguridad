@@ -333,7 +333,211 @@ DATOS CRUDOS                    VARIOGRAMA                     SUPERFICIE
 
 ---
 
-## 10. Glosario rápido
+## 10. Regression Kriging: combinando regresión con geoestadística
+
+### 10.1. ¿Por qué no basta con el kriging ordinario?
+
+El kriging ordinario (scripts 01-02) es excelente para interpolar una variable en el espacio. Pero tiene una limitación: **no incorpora variables explicativas**. Solo dice "el hurto aquí es alto porque los hurtos cercanos también son altos" — no dice *por qué*.
+
+Por otro lado, una regresión OLS clásica (`hurto ~ distancia_metro + pct_verde + ...`) sí incorpora predictores, pero **ignora la estructura espacial**: asume que los residuos son independientes, lo cual casi nunca es cierto en datos geográficos.
+
+La **Regression Kriging** (RK) combina lo mejor de ambos mundos:
+
+```
+Predicción final = Tendencia (OLS) + Residuo espacial (Kriging)
+                   └── lo que explican     └── lo que queda
+                       los predictores         sin explicar, pero
+                                               tiene patrón espacial
+```
+
+### 10.2. Los tres pasos del Regression Kriging
+
+**Paso 1: Regresión OLS (la tendencia)**
+
+Primero ajustamos una regresión lineal ordinaria:
+
+```
+percepción = β₀ + β₁(dist_metro) + β₂(allanamientos) + β₃(pct_mipyme) + ... + ε
+```
+
+Esto nos da:
+- **Coeficientes (β)** que dicen cuánto influye cada variable sobre la percepción de seguridad
+- **Residuos (ε)** = lo que el modelo OLS NO pudo explicar
+
+**Paso 2: Variograma de los residuos**
+
+Tomamos los residuos del OLS y les calculamos un variograma, exactamente como hicimos con los delitos en la sección 2. Si el variograma muestra estructura (no es plano), significa que hay patrones geográficos que los predictores no capturaron.
+
+En nuestro caso obtuvimos:
+- Nugget: 0.0497
+- Sill total: 0.1566
+- Range: 999 m
+- **Ratio nugget/sill: 0.317** (estructura espacial moderada)
+
+Esto significa que el 68.3% de la varianza de los residuos tiene estructura espacial — hay patrones geográficos que las 12 variables explicativas no capturan.
+
+**Paso 3: Kriging de los residuos**
+
+Usamos kriging ordinario para interpolar los residuos sobre la grilla fina de 50m. Esto crea una superficie suave que muestra dónde la percepción es **mejor** o **peor** de lo que los predictores predicen.
+
+**Resultado final:** Sumamos la predicción del OLS + el residuo krigeado en cada punto.
+
+### 10.3. ¿En qué se diferencia del SAR/SEM?
+
+| | Regression Kriging | SAR / SEM (econometría espacial) |
+|---|---|---|
+| **Estructura espacial** | Continua (variograma — distancias reales en metros) | Discreta (matriz de vecindad binaria: vecino sí/no) |
+| **Coeficientes** | Idénticos al OLS estándar — se interpretan igual | Modificados por el parámetro espacial ρ o λ, más difíciles de interpretar |
+| **Alcance espacial** | El range del variograma de residuos da una distancia exacta (999 m) | No hay equivalente directo — el efecto se difunde por la red de vecinos |
+| **Genera mapas continuos** | Sí — predice en cualquier punto del espacio | No — solo predice en las unidades originales (hexágonos) |
+| **Visualiza "errores"** | Sí — el mapa de residuos krigeados muestra zonas anómalas | No directamente |
+| **Coherencia con co-kriging** | Total — usa el mismo marco geoestadístico (variogramas, kriging) | Diferente marco teórico (econometría espacial) |
+| **Cuándo usarlo** | Cuando quieres predecir Y explicar, y tienes datos puntuales | Cuando tienes datos agregados en áreas y priorizas inferencia causal |
+
+Para este proyecto, la Regression Kriging es más natural porque:
+1. Ya estamos usando variogramas y kriging (scripts 01-02)
+2. Los coeficientes OLS son directamente interpretables
+3. El mapa de residuos espaciales revela información adicional valiosa
+4. Produce superficies continuas compatibles con los mapas de co-kriging
+
+### 10.4. Los cuatro mapas que genera
+
+El script `07_regression_kriging.R` produce un mapa interactivo con cuatro capas:
+
+1. **Regression Kriging (final):** La predicción completa = OLS + kriging residuos. Este es el mapa principal.
+
+2. **Solo OLS (tendencia):** Qué predice la regresión sin considerar el espacio. Muestra los gradientes que explican las variables (distancia al metro, allanamientos, empresas, etc.).
+
+3. **Residuo espacial (kriged):** Lo más interesante analíticamente. Muestra dónde la realidad difiere de lo que los predictores predicen:
+   - **Azul** = percepción MEJOR de lo esperado (residuo negativo = el valor real es menor que la predicción OLS, es decir, menos inseguridad de la esperada)
+   - **Rojo** = percepción PEOR de lo esperado (residuo positivo = más inseguridad de la esperada)
+
+   Las zonas rojas y azules merecen investigación: ¿qué factor no medido explica que esa zona sea diferente?
+
+4. **Incertidumbre (varianza):** Muestra dónde la predicción es más o menos confiable. Mayor varianza (azul más oscuro) = menos confianza. Típicamente la incertidumbre es mayor en los bordes del área de estudio y donde hay menos datos.
+
+---
+
+## 11. Interpretación de los resultados
+
+### 11.1. Variable dependiente
+
+La variable que estamos prediciendo es la **percepción de seguridad co-krigeada** (de los scripts 01-02). Esta superficie combina datos directos de la Encuesta de Percepción y Victimización (EPV) 2025 con datos de delitos, mediante co-kriging. Valores más altos = mayor percepción de inseguridad.
+
+### 11.2. Los coeficientes OLS y qué significan
+
+El modelo OLS tiene un R² ajustado de 0.1216 — es decir, las 12 variables explican el 12.2% de la variación en percepción. Esto puede parecer bajo, pero es normal en datos espaciales urbanos donde hay muchos factores no observados. Lo importante es que el variograma de residuos captura otro ~68% de la varianza restante como estructura espacial.
+
+**Variables significativas (p < 0.05):**
+
+| Variable | β | p-valor | Interpretación |
+|----------|---|---------|----------------|
+| **log_raids** (allanamientos, log) | −0.1287 | < 0.001 | Donde hay más allanamientos policiales, la percepción de inseguridad es MENOR. Un aumento de 1 unidad en log(allanamientos) se asocia con una reducción de 0.13 en el índice de percepción. Esto sugiere que la presencia policial activa (operativos) tiene un efecto disuasivo visible para los ciudadanos. |
+| **pct_mipyme** (% micro, pequeñas y medianas empresas) | −13.81 | < 0.001 | Donde hay mayor proporción de MiPymes, la percepción de inseguridad es MENOR. El coeficiente es grande porque pct_mipyme va de 0 a 1 — un aumento de 10 puntos porcentuales en la participación MiPyme se asocia con una reducción de 1.38 en el índice. Esto refleja que las zonas con tejido empresarial denso y diverso (tiendas, talleres, servicios) generan mayor vigilancia natural y sentimiento de seguridad. |
+
+**Variables marginalmente significativas (p < 0.10):**
+
+| Variable | β | p-valor | Interpretación |
+|----------|---|---------|----------------|
+| **dist_metro_km** | +0.0375 | 0.066 | Tendencia (no conclusiva) a mayor inseguridad percibida lejos del metro. |
+| **log_arrests** (capturas) | −0.0363 | 0.091 | Tendencia similar a allanamientos — más capturas, menos inseguridad percibida. |
+| **cambio_ops_total** (cambio en operativos antes/durante) | +0.0150 | 0.075 | Donde los operativos aumentaron más durante la obra, la percepción de inseguridad tiende a ser ligeramente mayor. Esto podría reflejar que la policía reforzó presencia precisamente en las zonas más problemáticas (causalidad inversa). |
+| **n_edificios** | +0.0009 | 0.051 | Leve tendencia a mayor inseguridad en zonas con más edificaciones. |
+
+**Variables no significativas (p > 0.10):**
+
+| Variable | β | p-valor | Nota |
+|----------|---|---------|------|
+| cambio_total (delitos) | −0.0003 | 0.48 | El cambio en delitos antes/durante la obra no predice la percepción |
+| log_seizures (incautaciones) | −0.0370 | 0.14 | Dirección esperada (negativa) pero no significativa |
+| densidad_empresas | +0.00004 | 0.72 | La cantidad bruta de empresas no importa — importa la composición (% MiPyme) |
+| pct_verde | +0.0601 | 0.18 | Las áreas verdes no se asocian significativamente con percepción |
+| uso_comercial | −0.0688 | 0.10 | Cerca del umbral — tendencia a menor inseguridad en zonas comerciales |
+| longitud_vias_m | +0.000008 | 0.70 | La densidad vial no predice percepción |
+
+### 11.3. El variograma de los residuos
+
+El variograma de residuos OLS nos dice algo fundamental: **¿qué tanto de la variación "no explicada" tiene un patrón geográfico?**
+
+```
+Variograma de residuos OLS:
+  Nugget = 0.0497   (31.7% del sill — ruido aleatorio)
+  Sill   = 0.1566   (varianza total de los residuos)
+  Range  = 999 m    (alcance de la correlación espacial)
+```
+
+**¿Qué significa el range de 999 m en los residuos?**
+
+Después de descontar el efecto de los 12 predictores, los residuos aún están correlacionados espacialmente hasta ~1 km. Esto significa que hay factores no medidos que influyen en la percepción de seguridad y que operan a escala de ~1 km. Posibles candidatos:
+- Dinámicas sociales de barrio (cohesión social, redes vecinales)
+- Presencia de actores específicos (bandas, vendedores ambulantes, habitantes de calle)
+- Historia del lugar (zonas con tradición de inseguridad)
+- Infraestructura de iluminación y vigilancia
+- Configuración urbanística (calles sin salida, lotes baldíos, puentes peatonales)
+
+**¿Qué significa el ratio nugget/sill de 0.317?**
+
+- El 31.7% de la varianza residual es ruido puro (sin estructura espacial)
+- El 68.3% restante tiene estructura espacial que el kriging puede capturar
+- Esto es una estructura **moderada**: los predictores capturan algo, pero no todo
+
+Si el ratio fuera mayor a 0.75, significaría que el OLS ya captura bien la variación espacial y el kriging de residuos aportaría poco. Si fuera menor a 0.25, significaría que hay patrones espaciales muy fuertes que los predictores no capturan.
+
+### 11.4. El mapa de residuos espaciales: dónde investigar
+
+El mapa del residuo krigeado es quizás el producto más valioso del análisis, porque señala **dónde hay anomalías** que merecen investigación de campo:
+
+- **Zonas azules (residuo negativo):** La percepción de inseguridad es mejor de lo que predicen las variables. Algo no medido está funcionando bien en esas zonas: ¿una JAC activa? ¿un comercio ancla que genera vigilancia natural? ¿un parque bien mantenido?
+
+- **Zonas rojas (residuo positivo):** La percepción de inseguridad es peor de lo esperado. Aunque las variables "dicen" que debería estar bien, algo está mal: ¿un punto de venta de drogas? ¿un lote baldío? ¿un tramo de obra particularmente invasivo?
+
+Estas zonas son insumo directo para **recomendaciones de política pública**: las zonas rojas son prioridad de intervención, y las zonas azules son modelos para replicar.
+
+### 11.5. Hallazgos principales para el Reto 2
+
+1. **Los allanamientos policiales son el predictor más fuerte** (β = −0.13, p < 0.001). Los operativos activos de la policía se asocian con mejor percepción de seguridad. Esto es un hallazgo accionable: reforzar operativos en el corredor del Metro puede mejorar la percepción.
+
+2. **El tejido MiPyme protege** (β = −13.81, p < 0.001). Las zonas con mayor proporción de micro, pequeñas y medianas empresas tienen mejor percepción de seguridad. Las MiPymes generan "ojos en la calle" (vigilancia natural). Proteger este tejido empresarial durante la obra es crucial.
+
+3. **La distancia al Metro no es significativa al 5%**, aunque hay una tendencia (p = 0.066). Esto no significa que la obra no tenga impacto — puede significar que los efectos operan a través de canales indirectos (cierre de negocios, cambio en operativos policiales) más que por proximidad directa.
+
+4. **El cambio en delitos antes/durante NO predice la percepción** (p = 0.48). La percepción no se mueve mecánicamente con los delitos. Esto es consistente con la literatura criminológica: la percepción de seguridad depende más de factores ambientales y sociales que de las tasas de delitos reales.
+
+5. **Hay estructura espacial no explicada** (range = 999 m, ratio n/s = 0.317). Factores no medidos influyen en la percepción hasta ~1 km de distancia. El mapa de residuos señala exactamente dónde están estas anomalías.
+
+---
+
+## 12. Resumen del flujo completo del proyecto
+
+```
+DATOS CRUDOS          VARIOGRAMA           CO-KRIGING          REGRESSION KRIGING
+(6 fuentes)           (estructura)         (superficie)        (modelo + mapa)
+
+Delitos ─────┐
+Percepción ──┤        ┌─ Variograma ─┐     ┌─ Superficie ─┐
+Operativos ──┤───────►│  directo +   │────►│  continua de │    ┌─ OLS: β's ──┐
+Empresas ────┤        │  cruzado     │     │  cada tipo   │    │ (por qué)   │
+Entorno OSM ─┤        └──────────────┘     └──────────────┘    │             │
+Secciones ───┘                                                 │ + Kriging   │
+                                                               │ residuos    │
+                                            Hexágonos con ────►│ (dónde)     │
+                                            69 variables       │             │
+                                                               └─ Mapa final─┘
+                                                                  4 capas
+```
+
+**Scripts del pipeline:**
+1. `01_cokriging_pipeline.R` — Variogramas + co-kriging de delitos y percepción
+2. `02_cokriging_maps.R` — Mapas raster de superficies co-krigeadas
+3. `03_antes_durante_metro.R` — Delitos y operativos antes/durante + anisotropía
+4. `04_empresas_metro.R` — Tejido empresarial (Registro Mercantil)
+5. `05_entorno_metro.R` — Entorno urbano (OpenStreetMap)
+6. `06_integracion_metro.R` — Regresión SAR/SEM + mapa integrado
+7. `07_regression_kriging.R` — Regression kriging + mapa de 4 capas
+
+---
+
+## 13. Glosario rápido
 
 | Término | Definición en una línea |
 |---------|------------------------|
@@ -350,3 +554,9 @@ DATOS CRUDOS                    VARIOGRAMA                     SUPERFICIE
 | BLUE | Best Linear Unbiased Estimator — propiedad que garantiza que kriging es óptimo entre los métodos lineales |
 | Estacionariedad | Supuesto de que la estructura espacial (variograma) es la misma en toda el área |
 | Anisotropía | Cuando la estructura espacial varía según la dirección (ejemplo: más correlación a lo largo del Metro que perpendicular) |
+| Regression Kriging | Método que combina regresión OLS (tendencia) + kriging de residuos (estructura espacial remanente) |
+| Residuo espacial | La diferencia entre el valor observado y lo que predice la regresión OLS, interpolada espacialmente por kriging |
+| Ratio nugget/sill | Proporción de varianza sin estructura espacial. Bajo (<0.25) = fuerte estructura; alto (>0.75) = poca estructura |
+| SAR | Spatial Autoregressive Model — modelo de econometría espacial que incorpora un rezago espacial de la variable dependiente |
+| SEM | Spatial Error Model — modelo de econometría espacial que incorpora autocorrelación en los errores |
+| OLS | Ordinary Least Squares — regresión lineal clásica sin componente espacial |
