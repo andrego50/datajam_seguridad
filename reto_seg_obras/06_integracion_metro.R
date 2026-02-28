@@ -5,6 +5,7 @@
 
 library(sf)
 library(spdep)
+library(spatialreg)
 library(dplyr)
 library(terra)
 library(raster)
@@ -81,6 +82,24 @@ if ("log_theft" %in% names(hex_grid)) {
 if ("log_shoplifting" %in% names(hex_grid)) {
   predictores <- c(predictores, "log_shoplifting")
   pred_labels <- c(pred_labels, "Hurto comercio (log, 2021-2023)")
+}
+
+# Operativos policiales (de 03_antes_durante_metro.R)
+if ("log_arrests" %in% names(hex_grid)) {
+  predictores <- c(predictores, "log_arrests")
+  pred_labels <- c(pred_labels, "Capturas (log, 2021-2023)")
+}
+if ("log_raids" %in% names(hex_grid)) {
+  predictores <- c(predictores, "log_raids")
+  pred_labels <- c(pred_labels, "Allanamientos (log, 2021-2023)")
+}
+if ("log_seizures" %in% names(hex_grid)) {
+  predictores <- c(predictores, "log_seizures")
+  pred_labels <- c(pred_labels, "Incautaciones (log, 2021-2023)")
+}
+if ("cambio_ops_total" %in% names(hex_grid)) {
+  predictores <- c(predictores, "cambio_ops_total")
+  pred_labels <- c(pred_labels, "Cambio total operativos (antes/durante)")
 }
 
 # Empresas (de 04_empresas_metro.R)
@@ -309,6 +328,8 @@ popups <- sprintf(
   Extorsión: %s | Lesiones: %s<br/>
   <b>Cambio (antes/durante):</b> %s<br/>
   <b>Percepción:</b> %s<br/>
+  <b>Operativos (2021-2023):</b><br/>
+  Capturas: %s | Allanamientos: %s | Incautaciones: %s<br/>
   <b>Empresas:</b> %s | MiPyme: %s<br/>
   <b>Entorno:</b> Verde: %s%% | Edificios: %s | Vías: %s m",
   hex_wgs$hex_id, round(hex_wgs$dist_metro),
@@ -318,6 +339,9 @@ popups <- sprintf(
   ifelse("assault" %in% names(hex_wgs), hex_wgs$assault, "N/A"),
   ifelse("cambio_total" %in% names(hex_wgs),
          sprintf("%+.1f%%", hex_wgs$cambio_total * 100), "N/A"),
+  ifelse("arrests" %in% names(hex_wgs), hex_wgs$arrests, "N/A"),
+  ifelse("raids" %in% names(hex_wgs), hex_wgs$raids, "N/A"),
+  ifelse("seizures" %in% names(hex_wgs), hex_wgs$seizures, "N/A"),
   ifelse("pred_percepcion" %in% names(hex_wgs) & !is.na(hex_wgs$pred_percepcion),
          sprintf("%.2f", hex_wgs$pred_percepcion), "N/A"),
   ifelse("n_empresas_2024" %in% names(hex_wgs) & !is.na(hex_wgs$n_empresas_2024),
@@ -408,6 +432,43 @@ if ("cambio_total" %in% names(hex_grid)) {
   }
 }
 
+# --- Superficies suavizadas: operativos policiales ---
+if ("log_arrests" %in% names(hex_grid)) {
+  rl <- hex_to_raster(hex_grid, "log_arrests")
+  if (!is.null(rl)) {
+    pal <- colorNumeric("PuBu", values(rl), na.color = "transparent")
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Capturas (log)")
+  }
+}
+
+if ("log_raids" %in% names(hex_grid)) {
+  rl <- hex_to_raster(hex_grid, "log_raids")
+  if (!is.null(rl)) {
+    pal <- colorNumeric("PuRd", values(rl), na.color = "transparent")
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Allanamientos (log)")
+  }
+}
+
+if ("log_seizures" %in% names(hex_grid)) {
+  rl <- hex_to_raster(hex_grid, "log_seizures")
+  if (!is.null(rl)) {
+    pal <- colorNumeric("BuPu", values(rl), na.color = "transparent")
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Incautaciones (log)")
+  }
+}
+
+if ("cambio_ops_total" %in% names(hex_grid)) {
+  rl <- hex_to_raster(hex_grid, "cambio_ops_total")
+  if (!is.null(rl)) {
+    pal <- colorNumeric("RdBu", values(rl), na.color = "transparent", reverse = TRUE)
+    m <- m |> addRasterImage(rl, colors = pal, opacity = 0.75,
+      group = "Cambio Operativos (antes/durante)")
+  }
+}
+
 if ("densidad_empresas" %in% names(hex_grid)) {
   rl <- hex_to_raster(hex_grid, "densidad_empresas")
   if (!is.null(rl)) {
@@ -456,6 +517,8 @@ m <- m |>
 # --- Control de capas ---
 all_groups <- c("Hurto Comercio (kriging)", "Hurto Personas (kriging)",
                 "Percepción (kriging)", "Cambio Delitos (antes/durante)",
+                "Capturas (log)", "Allanamientos (log)", "Incautaciones (log)",
+                "Cambio Operativos (antes/durante)",
                 "Densidad Empresarial", "Cobertura Verde", "Densidad Edificios",
                 "Grilla hexagonal (ref)", "Metro L1", "Estaciones")
 
