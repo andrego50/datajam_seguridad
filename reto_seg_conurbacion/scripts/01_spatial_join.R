@@ -98,16 +98,18 @@ procesar_siedco <- function(filepath, nombre_delito, secciones, bbox) {
     return(NULL)
   }
 
-  # Parsear fecha
+  # Parsear fecha — baseline unificado desde 2021
+  FECHA_MIN <- as.Date("2021-01-01")
+  ANIO_BASE <- 2021L
+
   df <- df %>%
     mutate(
       fecha = dmy(date_var),
       anio  = year(fecha),
       semana_iso = isoweek(fecha),
-      # Crear identificador unico de semana: anio * 100 + semana
-      t = as.integer((anio - min(anio, na.rm = TRUE)) * 52 + semana_iso)
+      t = as.integer((anio - ANIO_BASE) * 52 + semana_iso)
     ) %>%
-    filter(!is.na(fecha))
+    filter(!is.na(fecha), fecha >= FECHA_MIN)
 
   cat("  Rango de fechas:", as.character(min(df$fecha)),
       "a", as.character(max(df$fecha)), "\n")
