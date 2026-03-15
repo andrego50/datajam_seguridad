@@ -1,9 +1,9 @@
 # ==============================================================================
-# 02_chronnet_build.R - Construir una ChroNNet por tipo de delito
+# 02_chronnet_build.R - Construir ChroNNets para TODOS los delitos y operativos
 #
 # Centinelas Rosaristas - Reto 3: Seguridad Integral Region Metropolitana
-# Usa el formato (cell, t) generado por 01_spatial_join.R y la funcion
-# chronnet_create() del paquete chronnets (Ferreira et al., 2020).
+# Usa SOLO pares (cell, t) — sin datos espaciales.
+# Genera una ChroNNet por cada capa (8 delitos + 3 operativos = 11 redes).
 # ==============================================================================
 
 library(igraph)
@@ -16,7 +16,7 @@ PROC_DIR     <- file.path(getwd(), "data", "processed")
 CHRONNET_DIR <- file.path(getwd(), "output", "chronnets")
 dir.create(CHRONNET_DIR, recursive = TRUE, showWarnings = FALSE)
 
-# Cargar funciones ChroNNet
+# Cargar funciones ChroNNet (Ferreira et al., 2020)
 CHRONNETS_SRC <- file.path(dirname(getwd()), "..", "chronnets_ref", "code",
                            "chronnets.R")
 if (!file.exists(CHRONNETS_SRC)) {
@@ -26,22 +26,30 @@ if (!file.exists(CHRONNETS_SRC)) {
 source(CHRONNETS_SRC)
 
 # --- Configuracion ---
-NUM_CORES <- 2
+NUM_CORES <- 4
 cat("Usando", NUM_CORES, "cores\n")
 
-# Lista de delitos procesados
-delitos <- c("extorsion", "hurto_comercio", "hurto_personas", "lesiones",
-             "hurto_autos", "homicidios", "hurto_motos", "hurto_residencias")
-
 # ==============================================================================
-# Funcion para construir ChroNNet para un delito
+# Todas las capas: 8 delitos + 3 operativos
 # ==============================================================================
 
-construir_chronnet <- function(nombre_delito, proc_dir, out_dir, num_cores) {
-  cat("\n===", toupper(nombre_delito), "===\n")
+capas <- c(
+  # Delitos
+  "extorsion", "hurto_comercio", "hurto_personas", "lesiones",
+  "hurto_autos", "homicidios", "hurto_motos", "hurto_residencias",
+  # Operativos de policia
+  "capturas", "allanamientos", "incautaciones"
+)
+
+# ==============================================================================
+# Funcion para construir UNA ChroNNet — solo usa (cell, t), sin espacial
+# ==============================================================================
+
+construir_chronnet <- function(nombre_capa, proc_dir, out_dir, num_cores) {
+  cat("\n===", toupper(nombre_capa), "===\n")
 
   # Cargar datos del spatial join
-  rds_path <- file.path(proc_dir, paste0("siedco_", nombre_delito, ".rds"))
+  rds_path <- file.path(proc_dir, paste0("siedco_", nombre_capa, ".rds"))
   if (!file.exists(rds_path)) {
     cat("  Archivo no encontrado:", rds_path, "\n")
     return(NULL)
@@ -52,11 +60,12 @@ construir_chronnet <- function(nombre_delito, proc_dir, out_dir, num_cores) {
   cat("  Secciones unicas:", n_distinct(df$cell), "\n")
   cat("  Semanas unicas:", n_distinct(df$t), "\n")
 
-  # Agregar a pares unicos (cell, t) y mapear t secuencial
+  # Agregar a pares unicos (cell, t) y mapear t a secuencia continua
   semanas_unicas <- sort(unique(df$t))
   semana_map <- setNames(seq_along(semanas_unicas), semanas_unicas)
   df$t_seq <- semana_map[as.character(df$t)]
 
+  # Input para chronnet_create: solo columnas t y cell (enteros)
   chronnet_input <- df %>%
     dplyr::distinct(cell, t_seq) %>%
     dplyr::select(t = t_seq, cell) %>%
@@ -66,7 +75,7 @@ construir_chronnet <- function(nombre_delito, proc_dir, out_dir, num_cores) {
   cat("  Rango temporal: semana", min(chronnet_input$t),
       "a", max(chronnet_input$t), "\n")
 
-  # Construir ChroNNet
+  # Construir ChroNNet — solo usa IDs de celdas, sin coordenadas
   cat("  Construyendo ChroNNet...\n")
   t0 <- Sys.time()
   net <- chronnet_create(
@@ -78,17 +87,15 @@ construir_chronnet <- function(nombre_delito, proc_dir, out_dir, num_cores) {
   t1 <- Sys.time()
   cat("  Tiempo:", round(difftime(t1, t0, units = "secs"), 1), "segundos\n")
 
-  # Metricas basicas
+  # Metricas basicas de la red cruda
   cat("  Nodos:", vcount(net), "\n")
   cat("  Aristas:", ecount(net), "\n")
   cat("  Grado medio:", round(mean(degree(net)), 2), "\n")
   cat("  Densidad:", round(edge_density(net), 6), "\n")
 
-  # Podar aristas debiles (peso <= 1 = coincidencia casual)
-  # Umbral: al menos 2 co-ocurrencias para mantener la arista
+  # Podar aristas debiles (peso <= 1 = co-ocurrencia casual)
   if (ecount(net) > 0) {
     net_pruned <- delete.edges(net, which(E(net)$weight <= 1))
-    # Remover nodos aislados
     net_pruned <- delete.vertices(net_pruned,
                                   which(degree(net_pruned) == 0))
     cat("  Despues de poda (peso > 1):\n")
@@ -98,23 +105,11 @@ construir_chronnet <- function(nombre_delito, proc_dir, out_dir, num_cores) {
     net_pruned <- net
   }
 
-  # Detectar comunidades (Louvain)
-  if (vcount(net_pruned) > 0 && ecount(net_pruned) > 0) {
-    cat("  Detectando comunidades (Louvain)...\n")
-    comunidades <- cluster_louvain(net_pruned, weights = E(net_pruned)$weight)
-    cat("  Comunidades encontradas:", length(unique(membership(comunidades))), "\n")
-    cat("  Modularidad:", round(modularity(comunidades), 4), "\n")
-  } else {
-    comunidades <- NULL
-    cat("  Red vacia despues de poda, sin comunidades\n")
-  }
-
-  # Guardar resultado
+  # Guardar resultado (sin comunidades — se detectan en script aparte)
   resultado <- list(
-    delito      = nombre_delito,
+    capa        = nombre_capa,
     red_cruda   = net,
     red_podada  = net_pruned,
-    comunidades = comunidades,
     semana_map  = semana_map,
     metricas    = list(
       nodos_cruda    = vcount(net),
@@ -122,15 +117,11 @@ construir_chronnet <- function(nombre_delito, proc_dir, out_dir, num_cores) {
       nodos_podada   = vcount(net_pruned),
       aristas_podada = ecount(net_pruned),
       grado_medio    = mean(degree(net)),
-      densidad       = edge_density(net),
-      n_comunidades  = ifelse(!is.null(comunidades),
-                              length(unique(membership(comunidades))), 0),
-      modularidad    = ifelse(!is.null(comunidades),
-                              modularity(comunidades), NA)
+      densidad       = edge_density(net)
     )
   )
 
-  out_path <- file.path(out_dir, paste0("chronnet_", nombre_delito, ".rds"))
+  out_path <- file.path(out_dir, paste0("chronnet_", nombre_capa, ".rds"))
   saveRDS(resultado, out_path)
   cat("  Guardado:", out_path, "\n")
 
@@ -138,14 +129,12 @@ construir_chronnet <- function(nombre_delito, proc_dir, out_dir, num_cores) {
 }
 
 # ==============================================================================
-# Construir ChroNNet para cada delito
+# Construir ChroNNet para cada capa
 # ==============================================================================
 
 resultados <- list()
-for (delito in delitos) {
-  resultados[[delito]] <- construir_chronnet(
-    delito, PROC_DIR, CHRONNET_DIR, NUM_CORES
-  )
+for (capa in capas) {
+  resultados[[capa]] <- construir_chronnet(capa, PROC_DIR, CHRONNET_DIR, NUM_CORES)
   gc()
 }
 
@@ -154,20 +143,21 @@ for (delito in delitos) {
 # ==============================================================================
 
 cat("\n\n========== RESUMEN DE CHRONNETS ==========\n")
-cat(sprintf("%-20s %7s %8s %7s %8s %5s %8s\n",
-            "Delito", "Nodos", "Aristas", "Podados", "AristPod",
-            "Comun", "Modul"))
-cat(paste(rep("-", 70), collapse = ""), "\n")
+cat(sprintf("%-20s %7s %8s %7s %8s %8s %10s\n",
+            "Capa", "Nodos", "Aristas", "Podados", "AristPod",
+            "GradoMed", "Densidad"))
+cat(paste(rep("-", 75), collapse = ""), "\n")
 
 for (nombre in names(resultados)) {
   r <- resultados[[nombre]]
   if (!is.null(r)) {
     m <- r$metricas
-    cat(sprintf("%-20s %7d %8d %7d %8d %5d %8.4f\n",
+    cat(sprintf("%-20s %7d %8d %7d %8d %8.2f %10.6f\n",
                 nombre, m$nodos_cruda, m$aristas_cruda,
                 m$nodos_podada, m$aristas_podada,
-                m$n_comunidades, m$modularidad))
+                m$grado_medio, m$densidad))
   }
 }
 
-cat("\n=== ChroNNets construidas ===\n")
+cat("\n=== ChroNNets construidas (11 capas) ===\n")
+cat("Deteccion de comunidades: ejecutar 03_community_detection.R\n")

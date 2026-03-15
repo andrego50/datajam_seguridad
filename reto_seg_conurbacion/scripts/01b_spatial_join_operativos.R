@@ -91,16 +91,13 @@ procesar_operativo <- function(filepath, nombre, secciones, bbox) {
     return(NULL)
   }
 
-  # Parsear fecha — baseline unificado desde 2021
+  # Parsear fecha — baseline unificado desde 2021, resolucion diaria
   FECHA_MIN <- as.Date("2021-01-01")
-  ANIO_BASE <- 2021L
 
   df <- df %>%
     mutate(
       fecha = dmy(date_var),
-      anio  = year(fecha),
-      semana_iso = isoweek(fecha),
-      t = as.integer((anio - ANIO_BASE) * 52 + semana_iso)
+      t = as.integer(fecha - FECHA_MIN) + 1L
     ) %>%
     filter(!is.na(fecha), fecha >= FECHA_MIN)
 
@@ -123,11 +120,11 @@ procesar_operativo <- function(filepath, nombre, secciones, bbox) {
 
   # Crear tabla para ChroNNet: cell + t
   chronnet_input <- joined %>%
-    select(cell = secu_ccnct, t, fecha, anio, semana_iso, mpio_cdpmp) %>%
+    select(cell = secu_ccnct, t, fecha, mpio_cdpmp) %>%
     as.data.frame()
 
   cat("  Secciones unicas con eventos:", n_distinct(chronnet_input$cell), "\n")
-  cat("  Semanas unicas:", n_distinct(chronnet_input$t), "\n")
+  cat("  Dias unicos:", n_distinct(chronnet_input$t), "\n")
 
   # Guardar
   out_path <- file.path(PROC_DIR, paste0("siedco_", nombre, ".rds"))
